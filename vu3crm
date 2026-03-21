@@ -1,0 +1,208 @@
+#!/bin/zsh
+set -euo pipefail
+
+BASE="$HOME/crm-bot-v3"
+
+line() {
+  printf '%s %s\n' "$1" "$2"
+}
+
+q_count() {
+  find "$BASE/VU3Queue" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' '
+}
+p_count() {
+  find "$BASE/VU3QueueProcessed" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' '
+}
+b_count() {
+  find "$BASE/VU3QueueBlocked" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' '
+}
+
+full_stop() {
+  pkill -f 'run-crmwatch\.sh' >/dev/null 2>&1 || true
+  pkill -f 'run-crmworker\.sh' >/dev/null 2>&1 || true
+  pkill -f 'run-sessionwatch\.sh' >/dev/null 2>&1 || true
+  pkill -f 'node .*crm-watch\.js' >/dev/null 2>&1 || true
+  pkill -f 'node .*crm-worker\.js' >/dev/null 2>&1 || true
+  pkill -f 'node .*crm-session-watch\.js' >/dev/null 2>&1 || true
+  pkill -f 'node .*crm-auto-login\.js' >/dev/null 2>&1 || true
+}
+
+cmd_help() {
+  cat <<'H'
+🚗 VU3CRM CLI
+
+  🚀 on
+  🛑 off
+  📊 status
+  🔄 restart
+  🪪 crm-open
+  ❓ help
+H
+}
+
+cmd_on() {
+  cd "$BASE"
+
+  local crm_state crm_icon push_msg
+
+  echo "[vu3crm] force autologin..."
+  if ! node ./crm-auto-login.js; then
+    echo
+    line "⚫" "CRM: OFFLINE"
+    line "⚠️" "Autologin sikertelen, a folyamatok nem indulnak el."
+    echo
+    return 1
+  fi
+
+  crm_state="$(node ./crm-login-check.js 2>/dev/null || echo OFFLINE)"
+  if [ "$crm_state" != "ONLINE" ]; then
+    echo
+    line "⚫" "CRM: OFFLINE"
+    line "⚠️" "A CRM check nem ONLINE, a folyamatok nem indulnak el."
+    echo
+    return 1
+  fi
+
+  if pgrep -f 'run-crmwatch\.sh' >/dev/null 2>&1; then
+    echo "[vu3crm] már fut: crm-watch"
+  else
+    nohup /bin/zsh "$BASE/run-crmwatch.sh" >/dev/null 2>&1 &
+    echo "[vu3crm] crm-watch indul"
+  fi
+
+  if pgrep -f 'run-crmworker\.sh' >/dev/null 2>&1; then
+    echo "[vu3crm] már fut: crm-worker"
+  else
+    nohup /bin/zsh "$BASE/run-crmworker.sh" >/dev/null 2>&1 &
+    echo "[vu3crm] crm-worker indul"
+  fi
+
+  if pgrep -f 'run-sessionwatch\.sh' >/dev/null 2>&1; then
+    echo "[vu3crm] már fut: session-watch"
+  else
+    nohup /bin/zsh "$BASE/run-sessionwatch.sh" >/dev/null 2>&1 &
+    echo "[vu3crm] session-watch indul"
+  fi
+
+  sleep 2
+
+  crm_state="$(node ./crm-login-check.js 2>/dev/null || echo OFFLINE)"
+  case "$crm_state" in
+    ONLINE) crm_icon="🟢" ;;
+    OFFLINE) crm_icon="⚫" ;;
+    *) crm_icon="🟡" ;;
+  esac
+
+  push_msg="ONLINE push sikertelen"
+  if node ./crm-state-push.js ONLINE >/dev/null 2>&1; then
+    push_msg="ONLINE push elküldve"
+  fi
+
+  echo
+  line "✨" "VU3CRM ELINDULT"
+  echo
+  line "$crm_icon" "CRM: $crm_state"
+  line "👀" "CRM watch: RUNNING"
+  line "🔧" "Worker: RUNNING"
+  line "🧭" "Session watch: RUNNING"
+  echo
+  line "🔔" "$push_msg"
+  echo
+}
+
+cmd_off() {
+  local push_msg
+
+  full_stop
+  sleep 1
+
+  cd "$BASE"
+  node ./crm-logout.js >/dev/null 2>&1 || true
+  /bin/zsh "$BASE/tools/purge-profiles.sh" >/dev/null 2>&1 || true
+
+  sleep 1
+  full_stop
+  sleep 1
+
+  push_msg="OFFLINE push sikertelen"
+  if node "$BASE/crm-state-push.js" OFFLINE >/dev/null 2>&1; then
+    push_msg="OFFLINE push elküldve"
+  fi
+
+  echo
+  line "🛑" "VU3CRM LEÁLLT"
+  echo
+  line "⚫" "CRM: OFF"
+  line "•" "CRM watch: STOPPED"
+  line "•" "Worker: STOPPED"
+  line "•" "Session watch: STOPPED"
+  echo
+  line "🔕" "$push_msg"
+  echo
+}
+
+cmd_status() {
+  cd "$BASE"
+
+  local crm_state crm_icon
+  local watch_icon worker_icon session_icon
+  local watch_state worker_state session_state
+  local q p b
+
+  crm_state="$(node ./crm-login-check.js 2>/dev/null || echo OFFLINE)"
+
+  case "$crm_state" in
+    ONLINE) crm_icon="🟢" ;;
+    OFFLINE) crm_icon="⚫" ;;
+    *) crm_icon="🟡" ;;
+  esac
+
+  if pgrep -f 'run-crmwatch\.sh' >/dev/null 2>&1; then
+    watch_icon="👀"; watch_state="RUNNING"
+  else
+    watch_icon="•"; watch_state="STOPPED"
+  fi
+
+  if pgrep -f 'run-crmworker\.sh' >/dev/null 2>&1; then
+    worker_icon="🔧"; worker_state="RUNNING"
+  else
+    worker_icon="•"; worker_state="STOPPED"
+  fi
+
+  if pgrep -f 'run-sessionwatch\.sh' >/dev/null 2>&1; then
+    session_icon="🧭"; session_state="RUNNING"
+  else
+    session_icon="•"; session_state="STOPPED"
+  fi
+
+  q="$(q_count)"
+  p="$(p_count)"
+  b="$(b_count)"
+
+  echo
+  line "📊" "VU3CRM ÁLLAPOT"
+  echo
+  line "$crm_icon" "CRM: $crm_state"
+  line "$watch_icon" "CRM watch: $watch_state"
+  line "$worker_icon" "Worker: $worker_state"
+  line "$session_icon" "Session watch: $session_state"
+  echo
+  line "📦" "Queue: $q | 🔄 Processing: $(find "$BASE/VU3QueueProcessing" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ') | ✅ Processed: $p | ⛔ Blocked: $b"
+  echo
+}
+
+cmd_crm_open() {
+  cd "$BASE"
+  echo "→ CRM open..."
+  node ./crm-open-login.js || true
+}
+
+case "${1:-}" in
+  on)       cmd_on ;;
+  off)      cmd_off ;;
+  status)   cmd_status ;;
+  restart)  cmd_off; sleep 1; cmd_on ;;
+  crm-open) cmd_crm_open ;;
+  help|"")  cmd_help ;;
+  *) echo "Ismeretlen parancs: $1"; echo; cmd_help; exit 1 ;;
+esac
