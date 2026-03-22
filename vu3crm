@@ -13,10 +13,6 @@ q_count() {
 p_count() {
   find "$BASE/VU3QueueProcessed" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' '
 }
-b_count() {
-  find "$BASE/VU3QueueBlocked" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' '
-}
-
 full_stop() {
   pkill -f 'run-crmwatch\.sh' >/dev/null 2>&1 || true
   pkill -f 'run-crmworker\.sh' >/dev/null 2>&1 || true
@@ -147,7 +143,7 @@ cmd_status() {
   local crm_state crm_icon
   local watch_icon worker_icon session_icon
   local watch_state worker_state session_state
-  local q p b
+  local q p
 
   crm_state="$(node ./crm-login-check.js 2>/dev/null || echo OFFLINE)"
 
@@ -177,7 +173,6 @@ cmd_status() {
 
   q="$(q_count)"
   p="$(p_count)"
-  b="$(b_count)"
 
   echo
   line "📊" "VU3CRM ÁLLAPOT"
@@ -187,7 +182,7 @@ cmd_status() {
   line "$worker_icon" "Worker: $worker_state"
   line "$session_icon" "Session watch: $session_state"
   echo
-  line "📦" "Queue: $q | 🔄 Processing: $(find "$BASE/VU3QueueProcessing" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ') | ✅ Processed: $p | ⛔ Blocked: $b"
+  line "📦" "Queue: $q | 🔄 Processing: $(find "$BASE/VU3QueueProcessing" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ') | ✅ Processed: $p"
   echo
 }
 
