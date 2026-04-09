@@ -13,10 +13,12 @@ const STATE_FILE = path.join(STATE_DIR, "crm-session-watch.state");
 const FAIL_FILE = path.join(STATE_DIR, "crm-session-watch.fail.json");
 const LOCK_FILE = path.join(STATE_DIR, "crm-session-watch.autologin.lock");
 const RECOVERED_FLAG = path.join(STATE_DIR, "crm-session-watch.recovered.flag");
+const TWOFA_FILE = path.join(STATE_DIR, "crm-2fa.json");
 
 const GRACE_MS = 30 * 1000;
 const MIN_BAD_CHECKS = 2;
 const RETRY_COOLDOWN_MS = 90 * 1000;
+const LOCK_MAX_AGE_MS = 5 * 60 * 1000;
 
 function ensureDirs() {
   fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -47,7 +49,18 @@ function clearFile(file) {
 }
 
 function hasLock() {
-  return fs.existsSync(LOCK_FILE);
+  try {
+    const stat = fs.statSync(LOCK_FILE);
+    const ageMs = Date.now() - stat.mtimeMs;
+    if (ageMs > LOCK_MAX_AGE_MS) {
+      console.log(`[crm-session-watch] stale autologin lock törölve ageMs=${Math.round(ageMs)}/${LOCK_MAX_AGE_MS}`);
+      clearFile(LOCK_FILE);
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function setLock() {
@@ -164,7 +177,10 @@ function startWatchAndWorker() {
 
         console.log(`[crm-session-watch] OFFLINE grace count=${next.count}/${MIN_BAD_CHECKS} ageMs=${ageMs}/${GRACE_MS} cooldownMs=${sinceLastTry}/${RETRY_COOLDOWN_MS}`);
 
-        if (next.count >= MIN_BAD_CHECKS && ageMs >= GRACE_MS && sinceLastTry >= RETRY_COOLDOWN_MS) {
+        const waiting2FA = readJson(TWOFA_FILE);
+        if (waiting2FA?.status === "WAITING_2FA") {
+          console.log("[crm-session-watch] 2FA várakozás aktív, recovery szünetel");
+        } else if (next.count >= MIN_BAD_CHECKS && ageMs >= GRACE_MS && sinceLastTry >= RETRY_COOLDOWN_MS) {
           if (!hasLock()) {
             setLock();
             try {
